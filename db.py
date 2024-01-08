@@ -86,6 +86,7 @@ class DB:
 
     def delete_room(self,roomId,roomName,username):
         self.db.rooms.delete_one({"roomId": roomId, "roomName": roomName, "Admin": username})
+        self.db.messages.delete_many({"roomId": roomId, "roomName": roomName})
 
     def get_users_in_room(self, roomId,roomName, current_username):
         room = self.db.rooms.find_one({"roomId": roomId, "roomName": roomName}, {"_id": 0, "peers": 1})
@@ -113,15 +114,28 @@ class DB:
     def exit_room(self, roomId,roomName, username):
         self.db.rooms.update_one({"roomId": roomId, "roomName": roomName, "peers.username": username}, {"$set": {"peers.$.online": False}})
 
-    # def get_room(self, roomId, roomName):
-    # # Find the room with the specified roomId and roomName
-    #     room = self.db.rooms.find_one({"roomId": roomId, "roomName": roomName})
-    #     # If no such room exists, return None
-    #     if room is None:
-    #         return None
-    #     # Otherwise, return the room
-    #     return room
+    def is_user_in_any_room(self, username):
+        # Get all rooms
+        rooms = self.db.rooms.find()
+
+        for room in rooms:
+            # Get all peers in the current room
+            peers = room['peers']  # Adjust this line based on your room document structure
+
+            # Check if the user is in the current room
+            for peer in peers:
+                if peer['username'] == username:
+                    return True
+        # If the user is not in any room
+        return False
     
+    def leave_room(self, roomId, roomName, username):        
+        # Remove the user from the room
+        self.db.rooms.update_one(
+            {"roomId": roomId, "roomName": roomName},
+            {"$pull": {"peers": {"username": username}}}
+        )
+
     def get_room(self, roomId, roomName):
         return self.db.rooms.find_one({"roomId": roomId ,"roomName": roomName}, {'_id': 0, "password": 1, "Admin": 1, "peers" : 1} )
 
@@ -138,32 +152,46 @@ class DB:
         rooms = list(self.db.rooms.find({}, projection))
         return [{'roomId': str(room['roomId']), 'roomName': str(room['roomName'])} for room in rooms]
     
-    # def leave_room(self, roomId, roomName, peer):
-    #     # Find the room with the specified roomId and roomName
-    #     room = self.db.rooms.find_one({"roomId": roomId, "roomName": roomName})
+    def create_message(self, roomId, roomName, username, message, timestamp):
+        # Create a message document
+        message_doc = {
+            "roomId": roomId,
+            "roomName": roomName,
+            "username": username,
+            "message": message,
+            "timestamp": timestamp,  # Add a timestamp
+            "readBy": [username]  # Add a list of users who have read the message
+        }
         
-    #     # If no such room exists, return an error
-    #     if room is None:
-    #         return "Room not found."
+        # Store the message document in the messages collection and get its ID
+        return self.db.messages.insert_one(message_doc).inserted_id
+    
+    def get_messages_in_room(self, roomId, roomName):
+        # Find all messages for the given room
+        messages = self.db.messages.find({"roomId": roomId, "roomName": roomName})
         
-    #     # Remove the peer from the room's peers
-    #     peers = room["peers"]
-    #     if peer in peers:
-    #         peers.remove(peer)
-        
-    #     # Update the room in the database
-    #     self.db.rooms.update_one({"roomId": roomId, "roomName": roomName}, {"$set": {"peers": peers}})
-        
-    #     return "Successfully left the room."
+        # Convert the messages to a list and return it
+        return list(messages)
 
 
+    def get_all_unread_messages(self, username):
+        # Get the list of rooms the user is in
+        rooms = self.show_rooms(username)
+        
+        # Find all unread messages for the user in those rooms
+        unread_messages = self.db.messages.find(
+            {"roomId": {"$in": [room["roomId"] for room in rooms]}, "roomName": {"$in": [room["roomName"] for room in rooms]}, "readBy": {"$ne": username}}
+        )
+        
+        # Convert the messages to a list and return it
+        return [message for message in unread_messages]
 
-    # def leave_chat_room(self, room_name, username):
-    #     # Check if the chat room exists
-    #     chat_room = self.db.chat_rooms.find_one({"room_name": room_name})
-    #     if chat_room:
-    #         # Remove the user from the participants list
-    #         self.db.chat_rooms.update_one(
-    #             {"room_name": room_name},
-    #             {"$pull": {"participants": username}}
-    #         )
+    def mark_message_as_read(self, messageId, username):
+        # Add the user to the readBy field of the message
+        self.db.messages.update_one(
+            {"_id": messageId},
+            {"$addToSet": {"readBy": username}}
+        )
+
+    
+  
